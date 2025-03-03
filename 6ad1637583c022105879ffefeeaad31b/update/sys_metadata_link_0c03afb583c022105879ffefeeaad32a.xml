@@ -1,0 +1,404 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_metadata_link">
+    <sys_metadata_link action="INSERT_OR_UPDATE">
+        <directory>update</directory>
+        <documentkey>10243da787a3b510124b7777dabb35cc</documentkey>
+        <payload>&lt;?xml version="1.0" encoding="UTF-8"?&gt;&lt;record_update table="sys_script_include"&gt;
+    &lt;sys_script_include action="INSERT_OR_UPDATE"&gt;
+        &lt;access&gt;package_private&lt;/access&gt;
+        &lt;active&gt;true&lt;/active&gt;
+        &lt;api_name&gt;global.Energir_SPMUtils&lt;/api_name&gt;
+        &lt;caller_access/&gt;
+        &lt;client_callable&gt;false&lt;/client_callable&gt;
+        &lt;description&gt;This librairie is used to enhance or add functionality to SPM.
+  * COLLAB-3969: change cost plan name when resource plan name is updated.
+  * COLLAB-4020: Automate the EAC, resource and baseline for projects
+  *COLLAB-4177: En tant qu'équipe de gestion financière je souhaite que les demandes de ressources soit bloquées si fait au niveau du PRJ
+  *COLLAB-4241:Barrer le rappel de feuille de temps à tous à part finance TI lorsque le mois est terminé
+ * COLLAB-4676:DEM017326 - Service Now - Onglet - Charte de projet
+ * COLLAB-5315: Reference qualifier for resource_plan.u_cost_type&lt;/description&gt;
+        &lt;mobile_callable&gt;false&lt;/mobile_callable&gt;
+        &lt;name&gt;Energir_SPMUtils&lt;/name&gt;
+        &lt;sandbox_callable&gt;false&lt;/sandbox_callable&gt;
+        &lt;script&gt;&lt;![CDATA[var Energir_SPMUtils = Class.create();
+Energir_SPMUtils.prototype = {
+    initialize: function() {},
+    /**
+     * Handke the cost plan name and cost type change.
+     */
+    handleResourcePlanUpdate: function(resourcePlan) {
+        if (resourcePlan['sys_id'] == undefined)
+            throw new Error("No Resource plan sys_id was specified.");
+        else if (resourcePlan['name'] == undefined)
+            throw new Error("No name was specified.");
+        else if (resourcePlan['cost_type'] == undefined)
+            throw new Error("No cost_type was specified.");
+        else {
+            var costplangr = new GlideRecord('cost_plan');
+            costplangr.addEncodedQuery('resource_plan=' + resourcePlan['sys_id']);
+            costplangr.query();
+
+            while (costplangr.next()) {
+                if (resourcePlan['cost_type'] != costplangr.resource_type)
+                    costplangr.resource_type = resourcePlan['cost_type'];
+                if (resourcePlan['name'] != costplangr.name)
+                    costplangr.name = resourcePlan['name'];
+                costplangr.update();
+            }
+        }
+    },
+    /**
+     * Update Estimation at completion cost as you were clicking 
+     * on the UI action called "Calculate Completion Estimates".
+     */
+    updateEstimateAtCompletionCost: function(projectId) {
+        var projectCalculateAJAX = new ProjectCalculateAJAX();
+        projectCalculateAJAX.updateEstimateAtCompletionCostSubProjects(projectId, 'pm_project');
+    },
+
+    /**
+     * Recalculate resource cost as you were clicking
+     * on UI Action "Recalculate Resource Costs"
+     * CONDITIONS found in the UI Action: 
+     * current.active == true &amp;&amp; ['3','4,','7'].indexOf(current.getValue('state'))==-1 &amp;&amp; pm.isActive('com.snc.rate_model')  &amp;&amp; JSUtil.notNil(current.getValue('rate_model'))
+     */
+    recalculateResourceCost: function(projectId, startDate) {
+        var projectGr = new GlideRecord('pm_project');
+        projectGr.get(projectId);
+        if (projectGr.active &amp;&amp; ['3', '4,', '7'].indexOf(projectGr.getValue('state')) == -1 &amp;&amp; JSUtil.notNil(projectGr.getValue('rate_model'))) {
+            var startDateTime = new GlideDateTime();
+            if (!startDate) startDate = startDateTime.getDate();
+            var endDateTime = new GlideDateTime(projectGr.end_date);
+            var endDate = endDateTime.getDate();
+            var parm1 = 'project,' + projectId;
+            var parm2 = startDate + ',' + endDate + ',true,true,true';
+            gs.eventQueue('resource_cost_recalculate', null, parm1, parm2);
+            return true;
+        } else
+            return false;
+    },
+	
+    /**
+     * Recalculate resource cost as you were clicking on
+     * UI action called "Create Baseline"
+     */
+    createBaseline: function(projectId, projectName, projectNumber) {
+        var enableFinancialBaseline = 'true';
+        var enableTaskBaseline = 'true';
+        var glideDateTime = new GlideDateTime();
+        var baselineName = '(' + projectNumber + ') ' + projectName + ' (' + glideDateTime.getDate() + ')';
+        var description = 'Base de référence créée par le système le (' + glideDateTime.getDate() + ')';
+        var baseline = new GlideRecord("planned_task_baseline");
+        baseline.name = baselineName.trim();
+        baseline.top_task = projectId;
+        baseline.description = description;
+        baseline.enable_financial_baseline = enableFinancialBaseline;
+        baseline.enable_task_baseline = enableTaskBaseline;
+        var baseId = baseline.insert();
+
+        //schedule baseline to be created if checked..
+        if (enableTaskBaseline == "true") {
+            var tasks = new GlideRecord("planned_task");
+            tasks.addQuery("top_task", projectId);
+            tasks.query();
+            while (tasks.next()) {
+                var baseItem = new GlideRecord("planned_task_baseline_item");
+                baseItem.baseline = baseId;
+                baseItem.task = tasks.getUniqueValue();
+                baseItem.start = tasks.start_date;
+                baseItem.end = tasks.end_date;
+                baseItem.insert();
+            }
+        }
+
+        if ((enableFinancialBaseline == "true") &amp;&amp; baseId) {
+            var pmFinancialBaseline = new PmFinancialBaseline();
+            pmFinancialBaseline.createFinancialBaseline(baseId);
+        }
+
+    },
+
+    /**
+     * This function is called in a scheduled job
+     * to tune EAC, resource cost calculation 
+     * and baseline at the project level
+     */
+    runProjectCostsAndBaseline: function() {
+        var projectGr = new GlideRecord('pm_project');
+        projectGr.addEncodedQuery('sys_class_nameINjavascript:getValidProjectClasses()^primary_portfolio.portfolio_manager.u_vp!=1db4af5d0f6216c0f40749bce1050e00^stateNOT IN3,4,7^rate_modelISNOTEMPTY');
+        projectGr.query();
+        var projectId;
+        while (projectGr.next()) {
+            projectId = projectGr.sys_id + '';
+            this.updateEstimateAtCompletionCost(projectId);
+            this.recalculateResourceCost(projectId);
+            this.createBaseline(projectId, projectGr.short_description, projectGr.number);
+        }
+    },
+    RestrictionNewPlanRessourceButton: function(sysidP) {
+        var result = false;
+        var getProject = new GlideAggregate('pm_project_task');
+        getProject.addAggregate('COUNT');
+        getProject.addQuery('sys_id', sysidP);
+        getProject.query();
+        if (getProject.next()) {
+            var count = parseInt(getProject.getAggregate('COUNT'));
+            if (count &gt; 0) {
+                result = true;
+            }
+        }
+        return result;
+    },
+    ToptaskP: function(sysidP, table) {
+        var result = true;
+        var topTaskProblem = new GlideAggregate(table);
+        topTaskProblem.addAggregate('COUNT');
+        topTaskProblem.addQuery('sys_id', sysidP);
+        topTaskProblem.query();
+        if (topTaskProblem.next()) {
+            var count = parseInt(topTaskProblem.getAggregate('COUNT'));
+            if (count &gt; 0) {
+                result = false;
+            }
+        }
+        return result;
+    },
+    isWeekStartInCurrentMonth: function(weekstarton) {
+        var firstDayOfCurrentMonth = new GlideDateTime();
+        firstDayOfCurrentMonth.setDayOfMonth(1);
+        var datefirstDayOfCurrentMonth = firstDayOfCurrentMonth.getDate();
+        var firstdayOfNextMonth = new GlideDateTime(firstDayOfCurrentMonth);
+        firstdayOfNextMonth.addMonths(1);
+        firstdayOfNextMonth.setDayOfMonth(1);
+        var datefirstdayOfNextMonth = firstdayOfNextMonth.getDate();
+        var weekstartdate = new GlideDateTime(weekstarton);
+        var dateweekstartdate = weekstartdate.getDate();
+
+        var conditionST = (dateweekstartdate.onOrAfter(datefirstDayOfCurrentMonth) &amp;&amp; dateweekstartdate.before(datefirstdayOfNextMonth));
+        var conditionGp = gs.getUser().isMemberOf('70870d5787740250124b7777dabb35ad') || gs.getUser().hasRole('admin');
+
+        return conditionST || conditionGp;
+    },
+
+    GeneratePdfProject: function(projectSysid) {
+        var projectRecord = new GlideRecord('pm_project');
+        projectRecord.get(projectSysid);
+        var getTemplate = new GlideRecord("sysevent_email_template");
+        getTemplate.addQuery("sys_id", "ae5bd05e47978a1097744049116d4343");
+        getTemplate.query();
+        if (getTemplate.next()) {
+            var temp = getTemplate.message_html;
+            var updatedHTML = temp.replace(/\bProjet\b/g, projectRecord.getDisplayValue('number'));
+            updatedHTML = updatedHTML.replace('nom du projet', projectRecord.getDisplayValue('short_description'));
+            updatedHTML = updatedHTML.replace('Portefeuille est vide', projectRecord.getDisplayValue('primary_portfolio'));
+            updatedHTML = updatedHTML.replace('Programme est vide', projectRecord.getDisplayValue('primary_program'));
+            updatedHTML = updatedHTML.replace('Programme est vide', projectRecord.getDisplayValue('primary_program'));
+            updatedHTML = updatedHTML.replace('date de debut reelle', projectRecord.getDisplayValue('work_start'));
+            updatedHTML = updatedHTML.replace('Gestionnaire du projet est vide', projectRecord.getDisplayValue('project_manager'));
+
+
+
+            if (projectRecord.getDisplayValue('u_contextualization')) {
+                updatedHTML = updatedHTML.replace('Mise en contexte du projet est vide', projectRecord.getDisplayValue('u_contextualization'));
+
+            } else {
+                updatedHTML = updatedHTML.replace('Mise en contexte du projet est vide', '');
+            }
+
+
+
+
+            updatedHTML = updatedHTML.replace('creepar', gs.getUserDisplayName());
+            //////////////////////////////////////////// date - time ////////////////////////////////////////////
+            var gdt = new GlideDateTime();
+            var localDate = gdt.getLocalDate().toString();
+            var localTime = gdt.getUserFormattedLocalTime();
+            var formattedDateTime = localDate + ' ' + localTime;
+            updatedHTML = updatedHTML.replace('dateheure', formattedDateTime);
+            ////////////////////////////////////////////////////////////////////////////////////////////////////
+            if (projectRecord.getDisplayValue('u_project_objectives')) {
+                updatedHTML = updatedHTML.replace('Objectifs du projet est vide', projectRecord.getDisplayValue('u_project_objectives'));
+
+            } else {
+                updatedHTML = updatedHTML.replace('Objectifs du projet est vide', '');
+
+            }
+
+            if (projectRecord.getDisplayValue('u_critical_success_factors_charte')) {
+                updatedHTML = updatedHTML.replace('Facteurs critiques de succes est vide', projectRecord.getDisplayValue('u_critical_success_factors_charte'));
+
+            } else {
+                updatedHTML = updatedHTML.replace('Facteurs critiques de succes est vide', '');
+
+            }
+            if (projectRecord.getDisplayValue('u_delivery_approach_charte')) {
+                updatedHTML = updatedHTML.replace('Approche de livraison est vide', projectRecord.getDisplayValue('u_delivery_approach_charte'));
+
+            } else {
+                updatedHTML = updatedHTML.replace('Approche de livraison est vide', '');
+
+            }
+            if (projectRecord.getDisplayValue('u_major_deliverables')) {
+                updatedHTML = updatedHTML.replace('Grand livrables est vide', projectRecord.getDisplayValue('u_major_deliverables'));
+
+            } else {
+                updatedHTML = updatedHTML.replace('Grand livrables est vide', '');
+
+            }
+            if (projectRecord.getDisplayValue('u_summary_of_benefits')) {
+                updatedHTML = updatedHTML.replace('Resume des benefices est vide', projectRecord.getDisplayValue('u_summary_of_benefits'));
+
+            } else {
+                updatedHTML = updatedHTML.replace('Resume des benefices est vide', '');
+
+            }
+            if (projectRecord.getDisplayValue('u_inclusion_charte')) {
+                updatedHTML = updatedHTML.replace('inclusions est vide', projectRecord.getDisplayValue('u_inclusion_charte'));
+
+            } else {
+                updatedHTML = updatedHTML.replace('inclusions est vide', '');
+
+            }
+            if (projectRecord.getDisplayValue('u_exclusion_charte')) {
+                updatedHTML = updatedHTML.replace('exclusions est vide', projectRecord.getDisplayValue('u_exclusion_charte'));
+
+            } else {
+                updatedHTML = updatedHTML.replace('exclusions est vide', '');
+
+            }
+            if (projectRecord.getDisplayValue('u_constraints_charte')) {
+                updatedHTML = updatedHTML.replace('containtes est vide', projectRecord.getDisplayValue('u_constraints_charte'));
+
+            } else {
+                updatedHTML = updatedHTML.replace('containtes est vide', '');
+
+            }
+			if (projectRecord.getDisplayValue('u_risks_charte')) {
+                updatedHTML = updatedHTML.replace('risques est vide', projectRecord.getDisplayValue('u_risks_charte'));
+
+            } else {
+                updatedHTML = updatedHTML.replace('risques est vide', '');
+
+            }
+			if (projectRecord.getDisplayValue('u_assumptions')) {
+                updatedHTML = updatedHTML.replace('Hypotheses est vide', projectRecord.getDisplayValue('u_assumptions'));
+
+            } else {
+                updatedHTML = updatedHTML.replace('Hypotheses est vide', '');
+
+            }
+            /////////////////////////////////////////// parties prenantes ////////////////////////////////////
+            var partiePrenante = '';
+            var partieP = new GlideRecord('pm_m2m_project_stakeholder');
+            partieP.addQuery('project', projectRecord.sys_id.toString());
+            partieP.query();
+            while (partieP.next()) {
+                var stakeholder = partieP.stakeholder.user.getDisplayValue().trim();
+                var expectation = partieP.expectation.getDisplayValue().trim();
+                if (stakeholder !== '') {
+                    partiePrenante += '&lt;br&gt; - ' + stakeholder + ' | ' + expectation;
+                }
+                partiePrenante += '&lt;br&gt; ';
+            }
+
+            updatedHTML = updatedHTML.replace('Partie prenante est vide', partiePrenante);
+            // updatedHTML = updatedHTML.replace('Fonction est vide', functionP);
+        }
+        var v = new sn_pdfgeneratorutils.PDFGenerationAPI();
+        var result = v.convertToPDF(updatedHTML, "pm_project", projectRecord.sys_id, "Charte de Projet Numéro:" + projectRecord.number);
+        /////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+        if (result) {
+            var sysAttachmentGR = new GlideRecord('sys_attachment');
+            sysAttachmentGR.addQuery('table_name', 'pm_project');
+            sysAttachmentGR.addQuery('table_sys_id', projectRecord.sys_id);
+            sysAttachmentGR.addQuery('file_name', 'Charte de Projet Numéro:' + projectRecord.number + '.pdf');
+            sysAttachmentGR.query();
+            if (sysAttachmentGR.next()) {
+                var attachmentSysId = sysAttachmentGR.sys_id.toString();
+                action.setRedirectURL('/sys_attachment.do?sys_id=' + attachmentSysId + '&amp;view=true');
+            }
+        }
+
+
+        ///////////////////////////////// Convert to word ///////////
+        /*
+        var attachmentName = "Charte de Projet Numéro: " + current.number.toString() + ".doc";
+        var gsa = new GlideSysAttachment();
+         gsa.write(current, attachmentName, 'text/plain', updatedHTML);
+        action.setRedirectURL(current); */
+
+        // gs.sleep(8000);
+        sysAttachmentGR.table_sys_id = '';
+        sysAttachmentGR.update();
+
+
+
+    },
+
+	refQualFilterCostType: function(plan) {
+	// Serves as a reference qualifier on resource_plan.u_cost_type or cost_plan.u_cost_type
+	table = plan.getTableName();
+
+	// Objective: only show cost types that are correletad with a project task OTP element number (u_numero_element)
+		var logs = ['Filtering ' + table + '.u_cost_type'];
+		var filter = '';
+		
+		// Only apply if the task is a Project task, otherwise don't filter
+		if (plan.task &amp;&amp; plan.task.sys_class_name == 'pm_project_task') {
+			logs.push('Task is a project task: ' + plan.task.number);
+			
+			// u_numero_element is a mandatory field, but check nonetheless
+			if (plan.task.u_numero_element) {
+				var taskOtpElement = plan.task.u_numero_element; // This is normally a number figuring in the index of the otp_element object 
+				logs.push('OTP element for this task is: ' + taskOtpElement);
+				
+				// Lookup in u_task_type the OTP element number and get a list of the correlated cost types
+				var gr = new GlideRecord('u_task_type');
+				gr.addQuery('u_numero_element', taskOtpElement); // There may be more that one result, but for our purposes, they are all the same (same u_cost_type_prefixes)
+				gr.query();
+				
+				if (gr.next()) {
+					costTypes = gr.u_cost_type_prefixes; // List of references to Cost type definitions
+					filter = 'sys_idIN' + costTypes;
+				}
+			}
+		}
+		
+		logs.push('Filter is: ' + filter);
+		gs.log(logs.join('\n'), 'Script include: Energir_SPMUtils.refQualFilterCostType()');		
+		return filter;
+	},
+
+
+    type: 'Energir_SPMUtils'
+};]]&gt;&lt;/script&gt;
+        &lt;sys_class_name&gt;sys_script_include&lt;/sys_class_name&gt;
+        &lt;sys_created_by&gt;ojeffroy_admin&lt;/sys_created_by&gt;
+        &lt;sys_created_on&gt;2024-01-11 13:48:12&lt;/sys_created_on&gt;
+        &lt;sys_id&gt;10243da787a3b510124b7777dabb35cc&lt;/sys_id&gt;
+        &lt;sys_mod_count&gt;146&lt;/sys_mod_count&gt;
+        &lt;sys_name&gt;Energir_SPMUtils&lt;/sys_name&gt;
+        &lt;sys_package display_value="Global" source="global"&gt;global&lt;/sys_package&gt;
+        &lt;sys_policy/&gt;
+        &lt;sys_scope display_value="Global"&gt;global&lt;/sys_scope&gt;
+        &lt;sys_update_name&gt;sys_script_include_10243da787a3b510124b7777dabb35cc&lt;/sys_update_name&gt;
+        &lt;sys_updated_by&gt;bcrepeault_admin&lt;/sys_updated_by&gt;
+        &lt;sys_updated_on&gt;2024-12-11 13:48:34&lt;/sys_updated_on&gt;
+    &lt;/sys_script_include&gt;
+&lt;/record_update&gt;
+</payload>
+        <sys_class_name>sys_metadata_link</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2025-03-03 23:51:08</sys_created_on>
+        <sys_id>0c03afb583c022105879ffefeeaad32a</sys_id>
+        <sys_mod_count>0</sys_mod_count>
+        <sys_name>Energir_SPMUtils</sys_name>
+        <sys_package display_value="ServicenowGithub" source="x_1448057_servicen">6ad1637583c022105879ffefeeaad31b</sys_package>
+        <sys_policy/>
+        <sys_scope display_value="ServicenowGithub">6ad1637583c022105879ffefeeaad31b</sys_scope>
+        <sys_update_name>sys_metadata_link_0c03afb583c022105879ffefeeaad32a</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2025-03-03 23:51:08</sys_updated_on>
+        <tablename>sys_script_include</tablename>
+    </sys_metadata_link>
+</record_update>
