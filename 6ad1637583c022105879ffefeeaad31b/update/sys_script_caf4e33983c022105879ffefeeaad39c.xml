@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?><record_update sys_domain="global" table="sys_script">
+    <sys_script action="INSERT_OR_UPDATE">
+        <abort_action>false</abort_action>
+        <access>package_private</access>
+        <action_delete>false</action_delete>
+        <action_insert>false</action_insert>
+        <action_query>false</action_query>
+        <action_update>true</action_update>
+        <active>true</active>
+        <add_message>false</add_message>
+        <advanced>true</advanced>
+        <change_fields>false</change_fields>
+        <client_callable>false</client_callable>
+        <collection>problem</collection>
+        <condition/>
+        <description/>
+        <execute_function>false</execute_function>
+        <filter_condition table="problem">sys_class_nameVALCHANGES^EQ<item endquery="false" field="sys_class_name" goto="false" newquery="false" operator="VALCHANGES" or="false" value=""/>
+            <item endquery="true" field="" goto="false" newquery="false" operator="=" or="false" value=""/>
+        </filter_condition>
+        <is_rest>false</is_rest>
+        <message/>
+        <name>CopyAttachmentToStory/Epic/Demand</name>
+        <order>100</order>
+        <priority>100</priority>
+        <rest_method/>
+        <rest_method_text/>
+        <rest_service/>
+        <rest_service_text/>
+        <rest_variables/>
+        <role_conditions/>
+        <script><![CDATA[(function executeRule(current, previous /*null when async*/ ) {
+    // Copy attachments from Idea to story/epic/demand
+    var attachmentGR = new GlideRecord('sys_attachment');
+    attachmentGR.addQuery('table_name', 'idea');
+    attachmentGR.addQuery('table_sys_id', current.sys_id);
+    attachmentGR.query();
+    while (attachmentGR.next()) {
+        var targetTable;
+        if (current.task.number.indexOf("STRY") > -1) {
+            targetTable = 'rm_story';
+        } else if (current.task.number.indexOf("DEM") > -1) {
+            targetTable = 'dmn_demand';
+        } else if (current.task.number.indexOf("EPIC") > -1) {
+            targetTable = 'rm_epic';
+        } else {
+            continue; // Skip if task number doesn't match any of the specified prefixes
+        }
+
+        // Check if the attachment already exists in the target record
+        var targetAttachmentGR = new GlideRecord('sys_attachment');
+        targetAttachmentGR.addQuery('table_name', targetTable);
+        targetAttachmentGR.addQuery('table_sys_id', current.task.sys_id);
+        targetAttachmentGR.addQuery('file_name', attachmentGR.file_name);
+        targetAttachmentGR.query();
+        if (!targetAttachmentGR.hasNext()) {
+            // If no attachment with the same file name exists in the target record, copy it
+            GlideSysAttachment.copy('idea', current.sys_id, targetTable, current.task.sys_id);
+        }
+    }
+})(current, previous);
+]]></script>
+        <sys_class_name>sys_script</sys_class_name>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2025-03-04 00:01:17</sys_created_on>
+        <sys_domain>global</sys_domain>
+        <sys_domain_path>/</sys_domain_path>
+        <sys_id>caf4e33983c022105879ffefeeaad39c</sys_id>
+        <sys_mod_count>0</sys_mod_count>
+        <sys_name>CopyAttachmentToStory/Epic/Demand</sys_name>
+        <sys_overrides/>
+        <sys_package display_value="ServicenowGithub" source="x_1448057_servicen">6ad1637583c022105879ffefeeaad31b</sys_package>
+        <sys_policy/>
+        <sys_scope display_value="ServicenowGithub">6ad1637583c022105879ffefeeaad31b</sys_scope>
+        <sys_update_name>sys_script_caf4e33983c022105879ffefeeaad39c</sys_update_name>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2025-03-04 00:01:17</sys_updated_on>
+        <template/>
+        <when>before</when>
+    </sys_script>
+    <sys_translated_text action="delete_multiple" query="documentkey=caf4e33983c022105879ffefeeaad39c"/>
+    <sys_es_latest_script action="INSERT_OR_UPDATE">
+        <id>caf4e33983c022105879ffefeeaad39c</id>
+        <sys_created_by>admin</sys_created_by>
+        <sys_created_on>2025-03-04 00:01:17</sys_created_on>
+        <sys_id>2055273983c022105879ffefeeaad3a2</sys_id>
+        <sys_mod_count>0</sys_mod_count>
+        <sys_updated_by>admin</sys_updated_by>
+        <sys_updated_on>2025-03-04 00:01:17</sys_updated_on>
+        <table>sys_script</table>
+        <use_es_latest>true</use_es_latest>
+    </sys_es_latest_script>
+</record_update>
